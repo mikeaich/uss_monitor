@@ -25,6 +25,7 @@ typedef struct {
   pid_t       ppid;
   const char* name;
   size_t      uss;
+  size_t      new_uss;
   uint64_t    updated;
   bool        is_new;
 } process_info;
@@ -165,7 +166,7 @@ proc_write_report(int fd)
             info = (process_info*)process->info;
           }
 
-          info->uss = uss;
+          info->new_uss = uss;
           info->updated = iteration;
         }
       }
@@ -177,6 +178,7 @@ proc_write_report(int fd)
     rb_red_blk_node* process;
     while ((process = StackPop(stack))) {
       process_info* info = (process_info*)process->info;
+      len = 0;
       if (info->updated != iteration) {
         TRACE();
         // this record wasn't updated, so this process no longer exists
@@ -190,11 +192,16 @@ proc_write_report(int fd)
         } else {
           len = snprintf(buf, sizeof(buf), "new/ pid %u, ppid %u\n", info->pid, info->ppid);
         }
+      } else if (info->uss != info->new_uss) {
+        TRACE();
+        len = snprintf(buf, sizeof(buf), "update/ pid %u uss %u\n", info->pid, info->new_uss);
+        info->uss = info->new_uss;
       } else {
         TRACE();
-        len = snprintf(buf, sizeof(buf), "update/ pid %u uss %u\n", info->pid, info->uss);
       }
-      write(fd, buf, len);
+      if (len) {
+        write(fd, buf, len);
+      }
     }
   } else {
     perror("opendir()");
