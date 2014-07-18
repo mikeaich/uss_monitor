@@ -195,8 +195,8 @@ class GraphFrame(wx.Frame):
 
   def handle_new(self, pid, msg):
     if pid not in self.data:
-      print "[new pid %u]" % pid
       uss = float(msg.payload['uss']) / (1024 * 1024) # megabytes
+      print "[new pid %u uss %.3f]" % (pid, uss)
       self.data[pid] = { "uss": [uss], "xstart": self.x }
       plot = self.axes.plot(self.data[pid]['uss'], linewidth = 1, picker = 5)[0]
       plot.pid = pid
@@ -208,7 +208,7 @@ class GraphFrame(wx.Frame):
     if pid in self.data:
       uss = float(msg.payload['uss']) / (1024 * 1024) # megabytes
       self.data[pid]['uss'].append(uss)
-      print "[update pid %u uss %u --> length %u]" % (pid, uss, len(self.data[pid]['uss']))
+      print "[update pid %u uss %.3f --> length %u]" % (pid, uss, len(self.data[pid]['uss']))
 
   def handle_old(self, pid, msg):
     if pid not in self.data_stops:

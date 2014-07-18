@@ -161,12 +161,13 @@ proc_write_report(int fd)
 
             info->is_new = true;
             info->pid = pid;
+            info->uss = uss;
             RBTreeInsert(processes, (void*)pid, info);
           } else {
             info = (process_info*)process->info;
+            info->new_uss = uss;
           }
 
-          info->new_uss = uss;
           info->updated = iteration;
         }
       }
@@ -190,7 +191,7 @@ proc_write_report(int fd)
         if (info->name) {
           len = snprintf(buf, sizeof(buf), "new|pid=%u|ppid=%u|uss=%u|name=%s\n", info->pid, info->ppid, info->uss, info->name);
         } else {
-          len = snprintf(buf, sizeof(buf), "new|pid=%u|ppid=%u\n", info->pid, info->ppid);
+          len = snprintf(buf, sizeof(buf), "new|pid=%u|ppid=%u|uss=%u\n", info->pid, info->ppid, info->uss);
         }
       } else if (info->uss != info->new_uss) {
         TRACE();
