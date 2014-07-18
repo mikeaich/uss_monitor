@@ -182,19 +182,19 @@ proc_write_report(int fd)
       if (info->updated != iteration) {
         TRACE();
         // this record wasn't updated, so this process no longer exists
-        len = snprintf(buf, sizeof(buf), "old/ pid %u\n", info->pid);
+        len = snprintf(buf, sizeof(buf), "old|pid=%u\n", info->pid);
         RBDelete(processes, process);
       } else if (info->is_new) {
         TRACE();
         info->is_new = false;
         if (info->name) {
-          len = snprintf(buf, sizeof(buf), "new/ pid %u, ppid %u, name %s\n", info->pid, info->ppid, info->name);
+          len = snprintf(buf, sizeof(buf), "new|pid=%u|ppid=%u|uss=%u|name=%s\n", info->pid, info->ppid, info->uss, info->name);
         } else {
-          len = snprintf(buf, sizeof(buf), "new/ pid %u, ppid %u\n", info->pid, info->ppid);
+          len = snprintf(buf, sizeof(buf), "new|pid=%u|ppid=%u\n", info->pid, info->ppid);
         }
       } else if (info->uss != info->new_uss) {
         TRACE();
-        len = snprintf(buf, sizeof(buf), "update/ pid %u uss %u\n", info->pid, info->new_uss);
+        len = snprintf(buf, sizeof(buf), "update|pid=%u|uss=%u\n", info->pid, info->new_uss);
         info->uss = info->new_uss;
       } else {
         TRACE();

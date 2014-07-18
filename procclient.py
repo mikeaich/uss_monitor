@@ -12,21 +12,31 @@ from matplotlib.backends.backend_wxagg import \
 import numpy as np
 from matplotlib.lines import Line2D
 
-class ProcessInfo:
-  def __init__(self, pid, info):
-    self.pid = pid
-    self.info = info
-
-class Processes:
+class MessageGroup:
   def __init__(self):
-    self.pids = {}
-  def set(self, info):
-    self.pids[info.pid] = info
-  def toString(self):
-    string = ''
-    for pid in self.pids:
-      string = string + "pid %u: uss=%u\n" % (pid, self.pids[pid].info['uss'])
-    return string
+    self.messages = []
+  def add(self, payload):
+    self.messages.append(payload)
+  def dump(self):
+    for message in self.messages:
+      message.dump()
+
+class Message:
+  def __init__(self, type, fields):
+    self.type = type
+    self.payload = {}
+    for field in fields:
+      kv = field.split("=")
+      # we don't handle the 'name' key properly yet
+      if len(kv) == 2:
+        self.payload[kv[0]] = kv[1]
+      else:
+        self.payload['name'] = self.payload['name'] + " " + kv[0]
+    # self.dump()
+  def dump(self):
+    print "type: %s" % self.type
+    for key in self.payload:
+      print "   %s = %s" % (key, self.payload[key])
 
 class SocketThread(Thread):
   """ Socket worker thread, so we don't block the UI """
@@ -57,24 +67,35 @@ class SocketThread(Thread):
           if line == '>>>':
             """ Beginning of block marker """
             self.got_sob = True
-            self.block = Processes()
+            self.block = MessageGroup()
           elif line == '<<<':
             """ End of block marker """
             wx.CallAfter(self.postData, self.block)
-            self.block = Processes()
+            self.block = MessageGroup()
             self.got_eob = True
           elif self.got_sob:
             """ Handle info lines """
-            (pid, uss) = re.match("pid ([0-9]+) uss ([0-9]+)", line).group(1, 2)
-            pid = int(pid)
-            uss = int(uss)
-            info = {'uss': uss}
-            self.block.set(ProcessInfo(pid, info))
+            # print line
+            fields = line.split("|")
+            handlers = { "new": self.handle_new,
+                         "update": self.handle_update,
+                         "old": self.handle_old }
+            if fields[0] in handlers:
+              self.block.add(handlers[fields[0]](fields[1:]))
         else:
           """ This should always be the last line """
           self.stream = line
     close(client)
     wx.CallAfter(Publisher().sendMessage, "update", "Socket thread finished")
+
+  def handle_new(self, fields):
+    return Message("new", fields)
+
+  def handle_update(self, fields):
+    return Message("update", fields)
+
+  def handle_old(self, fields):
+    return Message("old", fields)
 
   def postData(self, data):
     Publisher().sendMessage("update", data)
@@ -160,31 +181,43 @@ class GraphFrame(wx.Frame):
     self.axes.legend(loc = 'upper right', fontsize = 8)
     self.canvas.draw()
 
-  def onNewData(self, data):
+  def handleMessages(self, batch):
     self.x = self.x + 1
-    for pid in data.pids:
-      uss = float(data.pids[pid].info['uss']) / float(1024 * 1024)
-      # print "x=%u: pid %u uss=%f MB" % (self.x, pid, uss)
-      if pid not in self.data:
-        print "STARTED %u" % pid
-        self.data[pid] = {"uss": [uss], "xstart": self.x}
-        plot = self.axes.plot(self.data[pid]['uss'], linewidth = 1, picker = 5)[0]
-        plot.pid = pid
-        self.plot_data[pid] = plot
-        self.axes.plot(self.x, uss, self.plot_data[pid].get_color() + 'o')
-      else:
-        self.data[pid]["uss"].append(uss)
-    for pid in self.data:
-      if pid not in data.pids and pid not in self.data_stops:
-        print "STOPPED %u" % pid
-        self.data_stops[pid] = True
-        self.axes.plot(self.x - 1, self.data[pid]['uss'][-1], self.plot_data[pid].get_color() + 'x')
+    for msg in batch.messages:
+      handlers = { "new": self.handle_new,
+                   "update": self.handle_update,
+                   "old": self.handle_old }
+      if "pid" in msg.payload:
+        handlers[msg.type](int(msg.payload['pid']), msg)
     self.redrawPlot()
+
+  def handle_new(self, pid, msg):
+    if pid not in self.data:
+      print "[new pid %u]" % pid
+      uss = float(msg.payload['uss']) / (1024 * 1024)
+      self.data[pid] = { "uss": [uss], "xstart": self.x }
+      plot = self.axes.plot(self.data[pid]['uss'], linewidth = 1, picker = 5)[0]
+      plot.pid = pid
+      if "name" in msg.payload:
+        plot.name = msg.payload['name']
+      self.plot_data[pid] = plot
+
+  def handle_update(self, pid, msg):
+    if pid in self.data:
+      uss = float(msg.payload['uss']) / (1024 * 1024)
+      self.data[pid]['uss'].append(uss)
+
+  def handle_old(self, pid, msg):
+    if pid not in self.data_stops:
+      print "[old pid %u]" % pid
+      self.data_stops[pid] = True
+      if pid in self.data:
+        self.axes.plot(self.x - 1, self.data[pid]['uss'][-1], self.plot_data[pid].get_color() + 'x')
 
   def update(self, msg):
     t = msg.data
-    if isinstance(t, Processes):
-      self.onNewData(t)
+    if isinstance(t, MessageGroup):
+      self.handleMessages(t)
     else:
       print "unhandled update type"
 
