@@ -170,11 +170,13 @@ class GraphFrame(wx.Frame):
     for pid in self.data:
       # self.plot_data[0].set_ydata(np.array(self.data[pid]["uss"]))
       # print "pid=%u --> xdata.len=%u, ydata.len=%u" % (pid, len(np.arange(self.data[pid]['xmin'], self.data[pid]['xmax'] + 1)), len(np.array(self.data[pid]['uss'])))
-      self.plot_data[pid].set_xdata(np.arange(self.data[pid]['xstart'], self.data[pid]['xstart'] + len(self.data[pid]['uss'])))
-      self.plot_data[pid].set_ydata(np.array(self.data[pid]['uss']))
-      yussmax = round(max(self.data[pid]['uss']), 0) + 1
-      if yussmax > ymax:
-        ymax = yussmax
+      if pid in self.plot_data:
+        plot = self.plot_data[pid]
+        plot.set_xdata(np.arange(self.data[pid]['xstart'], self.data[pid]['xstart'] + len(self.data[pid]['uss'])))
+        plot.set_ydata(np.array(self.data[pid]['uss']))
+        yussmax = round(max(self.data[pid]['uss']), 0) + 1
+        if yussmax > ymax:
+          ymax = yussmax
       # self.plot(np.array(np.arange(len(self.data)), self.data[pid]["uss"]), label = str(pid))
     self.axes.set_ybound(lower = ymin, upper = ymax)
     print "redraw: (%u, %u)-(%u, %u)" % (xmin, ymin, xmax, ymax)
@@ -194,7 +196,7 @@ class GraphFrame(wx.Frame):
   def handle_new(self, pid, msg):
     if pid not in self.data:
       print "[new pid %u]" % pid
-      uss = float(msg.payload['uss']) / (1024 * 1024)
+      uss = float(msg.payload['uss']) / (1024 * 1024) # megabytes
       self.data[pid] = { "uss": [uss], "xstart": self.x }
       plot = self.axes.plot(self.data[pid]['uss'], linewidth = 1, picker = 5)[0]
       plot.pid = pid
@@ -204,8 +206,9 @@ class GraphFrame(wx.Frame):
 
   def handle_update(self, pid, msg):
     if pid in self.data:
-      uss = float(msg.payload['uss']) / (1024 * 1024)
+      uss = float(msg.payload['uss']) / (1024 * 1024) # megabytes
       self.data[pid]['uss'].append(uss)
+      print "[update pid %u uss %u --> length %u]" % (pid, uss, len(self.data[pid]['uss']))
 
   def handle_old(self, pid, msg):
     if pid not in self.data_stops:
