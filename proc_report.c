@@ -76,7 +76,7 @@ int
 proc_write_report(int fd)
 {
   static uint64_t iteration = 0;
-  static pid_t max_pid = 0;
+  static pid_t    max_pid = 0;
 
   if (!processes) {
     processes = RBTreeCreate(tree_key_compare,
@@ -89,13 +89,13 @@ proc_write_report(int fd)
     }
   }
 
-  DIR* dp;
-  struct dirent* ep;     
-  dp = opendir("/proc/");
-  pid_t b2g_pid = 0;
-  char buf[1024];
-  int len;
+  struct dirent*  ep;     
+  pid_t           b2g_pid = 0;
+  char            buf[1024];
+  DIR*            dp;
+  int             len;
 
+  dp = opendir("/proc/");
   ++iteration;
 
   if (dp != NULL) {
@@ -201,7 +201,10 @@ proc_write_report(int fd)
         TRACE();
       }
       if (len) {
-        write(fd, buf, len);
+        if (write(fd, buf, len) < 0) {
+          perror("write()");
+          return -1;
+        }
       }
     }
   } else {

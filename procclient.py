@@ -12,7 +12,7 @@ from matplotlib.backends.backend_wxagg import \
 import numpy as np
 from matplotlib.lines import Line2D
 
-class MessageGroup:
+class MessageSet:
   def __init__(self):
     self.messages = []
   def add(self, payload):
@@ -67,11 +67,11 @@ class SocketThread(Thread):
           if line == '>>>':
             """ Beginning of block marker """
             self.got_sob = True
-            self.block = MessageGroup()
+            self.block = MessageSet()
           elif line == '<<<':
             """ End of block marker """
             wx.CallAfter(self.postData, self.block)
-            self.block = MessageGroup()
+            self.block = MessageSet()
             self.got_eob = True
           elif self.got_sob:
             """ Handle info lines """
@@ -115,7 +115,7 @@ class GraphFrame(wx.Frame):
     if isinstance(artist, Line2D):
       if artist.get_linewidth() == 1:
         artist.set_linewidth(3)
-        artist.set_label('%u' % artist.pid)
+        artist.set_label('%s (%s)' % (artist.name, artist.pid))
         axes = artist.get_axes()
         axes.text(x * 1.05, y * 1.05, "%.3f MB" % y, color = 'white')
         axes.plot(x, y, color = 'white', marker = 's')
@@ -183,16 +183,6 @@ class GraphFrame(wx.Frame):
     self.axes.legend(loc = 'upper right', fontsize = 8)
     self.canvas.draw()
 
-  def handleMessages(self, batch):
-    self.x = self.x + 1
-    for msg in batch.messages:
-      handlers = { "new": self.handle_new,
-                   "update": self.handle_update,
-                   "old": self.handle_old }
-      if "pid" in msg.payload:
-        handlers[msg.type](int(msg.payload['pid']), msg)
-    self.redrawPlot()
-
   def handle_new(self, pid, msg):
     if pid not in self.data:
       uss = float(msg.payload['uss']) / (1024 * 1024) # megabytes
@@ -207,20 +197,34 @@ class GraphFrame(wx.Frame):
   def handle_update(self, pid, msg):
     if pid in self.data:
       uss = float(msg.payload['uss']) / (1024 * 1024) # megabytes
-      self.data[pid]['uss'].append(uss)
+      self.data[pid]['uss'][-1] = uss
       print "[update pid %u uss %.3f --> length %u]" % (pid, uss, len(self.data[pid]['uss']))
 
   def handle_old(self, pid, msg):
     if pid not in self.data_stops:
       print "[old pid %u]" % pid
       self.data_stops[pid] = True
+      self.data[pid]['uss'].pop()
       if pid in self.data:
         self.axes.plot(self.x - 1, self.data[pid]['uss'][-1], self.plot_data[pid].get_color() + 'x')
 
+  def handle_messages(self, batch):
+    self.x = self.x + 1
+    for pid in self.data:
+      # for now, pre-duplicate all of the last data points
+      self.data[pid]['uss'].append(self.data[pid]['uss'][-1])
+    for msg in batch.messages:
+      handlers = { "new": self.handle_new,
+                   "update": self.handle_update,
+                   "old": self.handle_old }
+      if "pid" in msg.payload and msg.type in handlers:
+        handlers[msg.type](int(msg.payload['pid']), msg)
+    self.redrawPlot()
+
   def update(self, msg):
     t = msg.data
-    if isinstance(t, MessageGroup):
-      self.handleMessages(t)
+    if isinstance(t, MessageSet):
+      self.handle_messages(t)
     else:
       print "unhandled update type"
 

@@ -1,4 +1,5 @@
 #include <poll.h>
+#include <time.h>
 #include <stdio.h>
 #include <signal.h>
 #include <stdint.h>
@@ -12,7 +13,7 @@
 
 #include "proc_report.h"
 
-// #define DEBUG
+#define DEBUG
 
 #if defined(DEBUG)
 #define TRACE0(fmt, ...) printf("[%s:%d] " fmt "\n", __FILE__, __LINE__, ##__VA_ARGS__)
@@ -65,6 +66,12 @@ sig_alrm_handler(int signum)
   // do nothing
 }
 
+static void
+sig_pipe_handler(int signum)
+{
+  // do nothing
+}
+
 int
 main(void)
 {
@@ -85,6 +92,10 @@ main(void)
   pfds[1].events = POLLHUP | POLLPRI | POLLERR | POLLNVAL | POLLMSG | POLLREMOVE | POLLRDHUP | POLLRDBAND| POLLWRBAND;
 
   if (signal(SIGALRM, sig_alrm_handler) == SIG_ERR) {
+    perror("signal()");
+    return __LINE__;
+  }
+  if (signal(SIGPIPE, sig_pipe_handler) == SIG_ERR) {
     perror("signal()");
     return __LINE__;
   }
@@ -151,13 +162,16 @@ main(void)
     if (client != -1) {
       TRACE();
       write(client, ">>>\n", 4);
+      TRACE();
 
       struct timespec start;
       struct timespec end;
 
+      TRACE();
       clock_gettime(CLOCK_MONOTONIC, &start);
       proc_write_report(client);
       clock_gettime(CLOCK_MONOTONIC, &end);
+      TRACE();
 
       if (end.tv_nsec < start.tv_nsec) {
         end.tv_nsec += 1000000000L;
@@ -168,7 +182,9 @@ main(void)
       delta += (end.tv_nsec - start.tv_nsec) / 1000;
       printf("---> proc_write_report() took %lu us\n", delta);
 
+      TRACE();
       write(client, "<<<\n", 4);
+      TRACE();
     }
     if (new_client != -1) {
       client = new_client;
