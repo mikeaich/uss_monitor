@@ -70,7 +70,7 @@ class SocketThread(Thread):
             self.block = MessageSet()
           elif line == '<<<':
             """ End of block marker """
-            wx.CallAfter(self.postData, self.block)
+            wx.CallAfter(self.post_data, self.block)
             self.block = MessageSet()
             self.got_eob = True
           elif self.got_sob:
@@ -97,7 +97,7 @@ class SocketThread(Thread):
   def handle_old(self, fields):
     return Message("old", fields)
 
-  def postData(self, data):
+  def post_data(self, data):
     Publisher().sendMessage("update", data)
     
 class GraphFrame(wx.Frame):
@@ -105,7 +105,7 @@ class GraphFrame(wx.Frame):
   """
   title = 'b2g per-process USS'
     
-  def onPick(self, event):
+  def on_pick(self, event):
     artist = event.artist
     i = event.ind[(len(event.ind) - 1) / 2] # pick the middle value
     x, y = artist.get_data()
@@ -113,15 +113,16 @@ class GraphFrame(wx.Frame):
     y = y[i]
     print "pick: (%u, %f)" % (x, y)
     if isinstance(artist, Line2D):
-      if artist.get_linewidth() == 1:
-        artist.set_linewidth(3)
-        artist.set_label('%s (%s)' % (artist.name, artist.pid))
+      if event.mouseevent.button == 1:
+        if artist.get_linewidth() == 1:
+          artist.set_linewidth(3)
+        else:
+          artist.set_linewidth(1)
+      if event.mouseevent.button == 2:
         axes = artist.get_axes()
-        axes.text(x * 1.05, y * 1.05, "%.3f MB" % y, color = 'white')
+        axes.text(x + 0.5, y + 0.5, "%.3f MB" % y, color = 'black', fontsize = 10)
         axes.plot(x, y, color = 'white', marker = 's')
-      else:
-        artist.set_linewidth(1)
-    self.redrawPlot()
+    self.redraw_plot()
 
   def __init__(self):
     self.data = {}
@@ -134,17 +135,17 @@ class GraphFrame(wx.Frame):
     self.dpi = 100
     self.fig = Figure((3.0, 3.0), dpi = self.dpi)
     self.axes = self.fig.add_subplot(111)
-    self.axes.set_axis_bgcolor('black')
-    self.axes.set_xlabel('time (seconds)')
-    self.axes.set_ylabel('memory (MB)')
-    self.axes.set_title('b2g parent process USS (MiB) vs time (seconds)', size = 10)
+    # self.axes.set_axis_bgcolor('black')
+    self.axes.set_xlabel('Time (seconds)')
+    self.axes.set_ylabel('Memory (MB)')
+    self.axes.set_title('Process USS (MB) vs Time (seconds)', size = 10)
     pylab.setp(self.axes.get_xticklabels(), fontsize = 8)
     pylab.setp(self.axes.get_yticklabels(), fontsize = 8)
     # self.plot_data = self.axes.plot(self.data, linewidth = 1, color = (1, 1, 0))[0]
     self.plot_data = {}
 
     self.canvas = FigCanvas(panel, -1, self.fig)
-    self.canvas.callbacks.connect('pick_event', self.onPick)
+    self.canvas.callbacks.connect('pick_event', self.on_pick)
 
     self.vbox = wx.BoxSizer(wx.VERTICAL)
     self.vbox.Add(self.canvas, 1, flag = wx.LEFT | wx.TOP | wx.GROW)
@@ -155,7 +156,7 @@ class GraphFrame(wx.Frame):
 
     SocketThread()
 
-  def redrawPlot(self):
+  def redraw_plot(self):
     xmin = 0
     # xmax = len(self.data)
     xmax = self.x
@@ -177,6 +178,10 @@ class GraphFrame(wx.Frame):
         yussmax = round(max(self.data[pid]['uss']), 0) + 1
         if yussmax > ymax:
           ymax = yussmax
+        if plot.get_linewidth() == 1:
+          plot.set_label('')
+        else:
+          plot.set_label('%s (%s)' % (plot.name, plot.pid))
       # self.plot(np.array(np.arange(len(self.data)), self.data[pid]["uss"]), label = str(pid))
     self.axes.set_ybound(lower = ymin, upper = ymax)
     print "redraw: (%u, %u)-(%u, %u)" % (xmin, ymin, xmax, ymax)
@@ -186,12 +191,15 @@ class GraphFrame(wx.Frame):
   def handle_new(self, pid, msg):
     if pid not in self.data:
       uss = float(msg.payload['uss']) / (1024 * 1024) # megabytes
-      print "[new pid %u uss %.3f]" % (pid, uss)
       self.data[pid] = { "uss": [uss], "xstart": self.x }
-      plot = self.axes.plot(self.data[pid]['uss'], linewidth = 1, picker = 5)[0]
+      plot = self.axes.plot(self.data[pid]['uss'], linewidth = 1, picker = 3)[0]
       plot.pid = pid
       if "name" in msg.payload:
-        plot.name = msg.payload['name']
+        name = msg.payload['name']
+        plot.name = name
+        print "[new pid %u uss %.3f name '%s']" % (pid, uss, name)
+      else:
+        print "[new pid %u uss %.3f]" % (pid, uss)
       self.plot_data[pid] = plot
 
   def handle_update(self, pid, msg):
@@ -199,6 +207,9 @@ class GraphFrame(wx.Frame):
       uss = float(msg.payload['uss']) / (1024 * 1024) # megabytes
       self.data[pid]['uss'][-1] = uss
       print "[update pid %u uss %.3f --> length %u]" % (pid, uss, len(self.data[pid]['uss']))
+      if "name" in msg.payload:
+        print "[pid new name '%s']" % msg.payload['name']
+        self.plot_data[pid].name = msg.payload['name']
 
   def handle_old(self, pid, msg):
     if pid not in self.data_stops:
@@ -207,19 +218,21 @@ class GraphFrame(wx.Frame):
       self.data[pid]['uss'].pop()
       if pid in self.data:
         self.axes.plot(self.x - 1, self.data[pid]['uss'][-1], self.plot_data[pid].get_color() + 'x')
+        self.axes.text(self.x - 1, self.data[pid]['uss'][-1], "%s" % self.plot_data[pid].name, color = 'black', fontsize = 10)
 
   def handle_messages(self, batch):
     self.x = self.x + 1
     for pid in self.data:
       # for now, pre-duplicate all of the last data points
-      self.data[pid]['uss'].append(self.data[pid]['uss'][-1])
+      if pid not in self.data_stops:
+        self.data[pid]['uss'].append(self.data[pid]['uss'][-1])
     for msg in batch.messages:
       handlers = { "new": self.handle_new,
                    "update": self.handle_update,
                    "old": self.handle_old }
       if "pid" in msg.payload and msg.type in handlers:
         handlers[msg.type](int(msg.payload['pid']), msg)
-    self.redrawPlot()
+    self.redraw_plot()
 
   def update(self, msg):
     t = msg.data

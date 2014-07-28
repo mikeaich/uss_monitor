@@ -102,6 +102,8 @@ main(void)
 
   int client = -1;
   int nfds = 1;
+  int sync = 1;
+
   while (1) {
     TRACE("----------\n");
     pfds[0].revents = 0;
@@ -169,7 +171,8 @@ main(void)
 
       TRACE();
       clock_gettime(CLOCK_MONOTONIC, &start);
-      proc_write_report(client);
+      proc_write_report(client, sync);
+      sync = 0;
       clock_gettime(CLOCK_MONOTONIC, &end);
       TRACE();
 
@@ -188,6 +191,7 @@ main(void)
     }
     if (new_client != -1) {
       client = new_client;
+      sync = 1;
     }
   }
 

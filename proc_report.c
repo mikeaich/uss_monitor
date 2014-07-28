@@ -20,14 +20,22 @@ typedef unsigned int bool;
 static const bool true = 1;
 static const bool false = 0;
 
+typedef enum {
+  PS_UNKNOWN,     // process status is unknown
+  PS_NEW,         // process was created just before this iteration
+  PS_IDLE,        // process has not changed vitals since last iteration
+  PS_UPDATED,     // process has changed vitals since last iteration
+  PS_RENAMED      // process has changed names
+} PROCESS_STATUS;
+
 typedef struct {
-  pid_t       pid;
-  pid_t       ppid;
-  const char* name;
-  size_t      uss;
-  size_t      new_uss;
-  uint64_t    updated;
-  bool        is_new;
+  pid_t           pid;
+  pid_t           ppid;
+  const char*     name;
+  const char*     new_name;
+  size_t          uss;
+  size_t          new_uss;
+  PROCESS_STATUS  status;
 } process_info;
 
 int
@@ -73,10 +81,9 @@ tree_node_dump(void* node)
 static rb_red_blk_tree* processes = NULL;
 
 int
-proc_write_report(int fd)
+proc_write_report(int fd, int sync)
 {
-  static uint64_t iteration = 0;
-  static pid_t    max_pid = 0;
+  static pid_t max_pid = 0;
 
   if (!processes) {
     processes = RBTreeCreate(tree_key_compare,
@@ -96,7 +103,6 @@ proc_write_report(int fd)
   int             len;
 
   dp = opendir("/proc/");
-  ++iteration;
 
   if (dp != NULL) {
     while ((ep = readdir(dp))) {
@@ -110,6 +116,8 @@ proc_write_report(int fd)
         snprintf(buf, sizeof(buf), "/proc/%u/smaps", pid);
         FILE* f = fopen(buf, "r");
         if (f) {
+          // calculate USS: the total size of all of the private data held
+          // by this process.
           uint64_t uss = 0;
           while (fgets(buf, sizeof(buf), f)) {
             uint64_t val;
@@ -121,29 +129,29 @@ proc_write_report(int fd)
           fclose(f);
           TRACE("uss = %" PRIu64 "\n", uss);
 
-          rb_red_blk_node* process;
+          // get the internal name of the process, if it exists
+          const char* name = NULL;
+          snprintf(buf, sizeof(buf), "/proc/%u/comm", pid);
+          f = fopen(buf, "r");
+          *buf = '\0';
+          if (f) {
+            fgets(buf, sizeof(buf), f);
+            len = strlen(buf);
+            if (buf[len - 1] == '\n') {
+              // get rid of the newline
+              buf[len - 1] = '\0';
+            }
+            name = strdup(buf);
+            fclose(f);
+          }
+          
+          rb_red_blk_node* process = RBExactQuery(processes, (void*)pid);
           process_info* info;
-          if ((process = RBExactQuery(processes, (void*)pid)) == NULL) {
+          if (!process) {
             TRACE();
             // this process is new, add it to the tree
             info = malloc(sizeof(process_info));
-
-            // get the process name, if it exists
-            snprintf(buf, sizeof(buf), "/proc/%u/comm", pid);
-            f = fopen(buf, "r");
-            *buf = '\0';
-            if (f) {
-              fgets(buf, sizeof(buf), f);
-              len = strlen(buf);
-              if (buf[len - 1] == '\n') {
-                // get rid of the newline
-                buf[len - 1] = '\0';
-              }
-              info->name = strdup(buf);
-              fclose(f);
-            } else {
-              info->name = NULL;
-            }
+            info->status = PS_NEW;
 
             // try to get the new process' parent process ID
             info->ppid = 0;
@@ -159,16 +167,30 @@ proc_write_report(int fd)
             }
             TRACE("ppid = %u\n", info->ppid);
 
-            info->is_new = true;
             info->pid = pid;
             info->uss = uss;
+            info->name = name;
+
             RBTreeInsert(processes, (void*)pid, info);
           } else {
+            TRACE();
+            // this process already exists, update its record
             info = (process_info*)process->info;
-            info->new_uss = uss;
-          }
+            info->status = PS_IDLE;
 
-          info->updated = iteration;
+            if (uss != info->uss) {
+              info->status = PS_UPDATED;
+              info->uss = uss;
+            }
+            if (!info->name || strcmp(info->name, name) != 0) {
+              // this case must appear last
+              info->status = PS_RENAMED;
+              if (info->name) {
+                free((void*)info->name);
+              }
+              info->name = name;
+            }
+          }
         }
       }
     }
@@ -179,26 +201,47 @@ proc_write_report(int fd)
     rb_red_blk_node* process;
     while ((process = StackPop(stack))) {
       process_info* info = (process_info*)process->info;
+      PROCESS_STATUS status = info->status;
+
+      if (sync) {
+        status = PS_NEW;
+      }
       len = 0;
-      if (info->updated != iteration) {
-        TRACE();
-        // this record wasn't updated, so this process no longer exists
-        len = snprintf(buf, sizeof(buf), "old|pid=%u\n", info->pid);
-        RBDelete(processes, process);
-      } else if (info->is_new) {
-        TRACE();
-        info->is_new = false;
-        if (info->name) {
-          len = snprintf(buf, sizeof(buf), "new|pid=%u|ppid=%u|uss=%u|name=%s\n", info->pid, info->ppid, info->uss, info->name);
-        } else {
-          len = snprintf(buf, sizeof(buf), "new|pid=%u|ppid=%u|uss=%u\n", info->pid, info->ppid, info->uss);
-        }
-      } else if (info->uss != info->new_uss) {
-        TRACE();
-        len = snprintf(buf, sizeof(buf), "update|pid=%u|uss=%u\n", info->pid, info->new_uss);
-        info->uss = info->new_uss;
-      } else {
-        TRACE();
+      switch (info->status) {
+        case PS_UNKNOWN:
+          TRACE();
+          // this record wasn't updated, so this process no longer exists
+          len = snprintf(buf, sizeof(buf), "old|pid=%u\n", info->pid);
+          RBDelete(processes, process);
+          break;
+
+        case PS_NEW:
+          TRACE();
+          if (info->name) {
+            len = snprintf(buf, sizeof(buf), "new|pid=%u|ppid=%u|uss=%u|name=%s\n",
+                           info->pid, info->ppid, info->uss, info->name);
+          } else {
+            len = snprintf(buf, sizeof(buf), "new|pid=%u|ppid=%u|uss=%u\n",
+                           info->pid, info->ppid, info->uss);
+          }
+          break;
+
+        case PS_UPDATED:
+          TRACE();
+          len = snprintf(buf, sizeof(buf), "update|pid=%u|uss=%u\n",
+                         info->pid, info->uss);
+          break;
+
+        case PS_RENAMED:
+          TRACE();
+          len = snprintf(buf, sizeof(buf), "update|pid=%u|uss=%u|name=%s\n",
+                         info->pid, info->uss, info->name);
+          break;
+
+        case PS_IDLE:
+        default:
+          // nothing to do
+          break;
       }
       if (len) {
         if (write(fd, buf, len) < 0) {
@@ -206,6 +249,7 @@ proc_write_report(int fd)
           return -1;
         }
       }
+      info->status = PS_UNKNOWN; // reset state to unknown
     }
   } else {
     perror("opendir()");
