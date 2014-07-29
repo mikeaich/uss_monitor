@@ -207,7 +207,7 @@ proc_write_report(int fd, int sync)
         status = PS_NEW;
       }
       len = 0;
-      switch (info->status) {
+      switch (status) {
         case PS_UNKNOWN:
           TRACE();
           // this record wasn't updated, so this process no longer exists
