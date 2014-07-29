@@ -104,7 +104,7 @@ proc_write_report(int fd, int sync)
 
   dp = opendir("/proc/");
 
-  if (dp != NULL) {
+  if (dp) {
     while ((ep = readdir(dp))) {
       pid_t pid;
 
@@ -182,13 +182,14 @@ proc_write_report(int fd, int sync)
               info->status = PS_UPDATED;
               info->uss = uss;
             }
-            if (!info->name || strcmp(info->name, name) != 0) {
-              // this case must appear last
+
+            // this case must appear last
+            if (!info->name || !name || strcmp(info->name, name) != 0) {
               info->status = PS_RENAMED;
-              if (info->name) {
-                free((void*)info->name);
-              }
+              free((void*)info->name);
               info->name = name;
+            } else {
+              free(name);
             }
           }
         }
