@@ -1,6 +1,7 @@
 
 import re
 import wx
+import os
 from socket import *
 from threading import Thread
 from wx.lib.pubsub import Publisher
@@ -38,24 +39,38 @@ class Message:
     for key in self.payload:
       print "   %s = %s" % (key, self.payload[key])
 
+class ConnectionStatus:
+  def __init__(self, text):
+    self.text = text
+    self.dump()
+  def dump(self):
+    print "connection status: '%s'" % self.text
+
 class SocketThread(Thread):
   """ Socket worker thread, so we don't block the UI """
 
-  def __init__(self):
+  def __init__(self, host, port):
     """ Initialize socket thread class """
     Thread.__init__(self)
     self.stream = ''
     self.block = {}
     self.got_sob = False
     self.got_eob = False
+    self.host = host
+    self.port = port
     self.start()
 
   def run(self):
     """ Run socket thread """
     client = socket(AF_INET, SOCK_STREAM)
-    print "Connecting..."
-    client.connect_ex(('localhost', 26600))
-    print "Connected!"
+    hostport = "%s:%d" % (self.host, self.port)
+    self.post_connection_status(ConnectionStatus("Connecting to %s..." % hostport))
+    rv = client.connect_ex((self.host, self.port))
+    if rv != 0:
+      self.post_connection_status(ConnectionStatus("Connection to %s failed (%s)" % (hostport, os.strerror(rv))))
+      return False
+    self.post_connection_status(ConnectionStatus("Connected to %s" % hostport))
+
     while True:
       chunk = client.recv(1024)
       self.stream = self.stream + chunk
@@ -99,50 +114,50 @@ class SocketThread(Thread):
 
   def post_data(self, data):
     Publisher().sendMessage("update", data)
-    
+
+  def post_connection_status(self, data):
+    Publisher().sendMessage("connection", data)
+
 class GraphFrame(wx.Frame):
   """ The main frame of the application
   """
-  title = 'b2g per-process USS'
-    
-  def on_pick(self, event):
-    artist = event.artist
-    i = event.ind[(len(event.ind) - 1) / 2] # pick the middle value
-    x, y = artist.get_data()
-    x = x[i]
-    y = y[i]
-    print "pick: (%u, %f)" % (x, y)
-    if isinstance(artist, Line2D):
-      if event.mouseevent.button == 1:
-        if artist.get_linewidth() == 1:
-          artist.set_linewidth(3)
-        else:
-          artist.set_linewidth(1)
-      if event.mouseevent.button == 2:
-        axes = artist.get_axes()
-        axes.text(x + 0.5, y + 0.5, "%.3f MB" % y, color = 'black', fontsize = 10)
-        axes.plot(x, y, color = 'white', marker = 's')
-    self.redraw_plot()
+  title = 'Firefox OS per-process USS'
+  host = 'localhost'
+  port = 26600
 
   def __init__(self):
-    self.data = {}
-    self.data_stops = {}
+    # first we need to call the base class initializer
+    wx.Frame.__init__(self, None, -1, self.title)
+
+    # the following dictionaries are keyed by PID
+    self.data = {}        # all of the data to be plotted
+    self.plot_starts = {} # process-started markers
+    self.plot_stops = {}  # process-stopped/killed markers
+    self.plot_data = {}   # record of existing plots
     self.x = 0
 
-    wx.Frame.__init__(self, None, -1, self.title)
+    self.create_menu()
+    self.create_status_bar()
+
     panel = wx.Panel(self, -1)
 
     self.dpi = 100
     self.fig = Figure((3.0, 3.0), dpi = self.dpi)
-    self.axes = self.fig.add_subplot(111)
+    axes = self.fig.add_subplot(111)
+
+    # box = self.axes.get_position()
+    # self.axes.set_position([box.x0, box.y0, box.width * 0.9, box.height])
+    # self.axes.legend(loc = 'center left', fontsize = 8, bbox_to_anchor = (1, 0.5))
     # self.axes.set_axis_bgcolor('black')
-    self.axes.set_xlabel('Time (seconds)')
-    self.axes.set_ylabel('Memory (MB)')
-    self.axes.set_title('Process USS (MB) vs Time (seconds)', size = 10)
-    pylab.setp(self.axes.get_xticklabels(), fontsize = 8)
-    pylab.setp(self.axes.get_yticklabels(), fontsize = 8)
-    # self.plot_data = self.axes.plot(self.data, linewidth = 1, color = (1, 1, 0))[0]
-    self.plot_data = {}
+
+    axes.grid(True, color = 'gray')
+    axes.set_xlabel('Time (seconds)')
+    axes.set_ylabel('Memory (MB)')
+    axes.set_title('Process USS (MB) vs Time (seconds)', size = 10)
+    pylab.setp(axes.get_xticklabels(), fontsize = 8)
+    pylab.setp(axes.get_yticklabels(), fontsize = 8)
+    pylab.setp(axes.get_xticklabels(), visible = True)
+    self.axes = axes
 
     self.canvas = FigCanvas(panel, -1, self.fig)
     self.canvas.callbacks.connect('pick_event', self.on_pick)
@@ -153,8 +168,86 @@ class GraphFrame(wx.Frame):
     self.vbox.Fit(self)
 
     Publisher().subscribe(self.update, "update")
+    Publisher().subscribe(self.connection, "connection")
 
-    SocketThread()
+    SocketThread(self.host, self.port)
+
+  def create_menu(self):
+    self.menubar = wx.MenuBar()
+
+    file = wx.Menu()
+    save = file.Append(-1, "&Save plot...\tCtrl+S", "Save plot to file")
+    self.Bind(wx.EVT_MENU, self.on_file_save, save)
+    file.AppendSeparator()
+    connect = file.Append(-1, "&Connect...\tCtrl+C", "Connection to a procserver")
+    connect.Enable(False) # for now
+    self.Bind(wx.EVT_MENU, self.on_file_connect, connect)
+    disconnect = file.Append(-1, "&Disconnect\tCtrl+D", "Disconnect from a procserver")
+    disconnect.Enable(False) # for now
+    self.Bind(wx.EVT_MENU, self.on_file_disconnect, disconnect)
+    file.AppendSeparator()
+    exit = file.Append(-1, "E&xit", "Exit")
+    self.Bind(wx.EVT_MENU, self.on_file_exit, exit)
+
+    self.menubar.Append(file, "&File")
+    self.SetMenuBar(self.menubar)
+
+  def on_file_connect(self, event):
+    print "File > Connect..."
+
+  def on_file_disconnect(self, event):
+    print "File > Disconnect"
+
+  def on_file_save(self, event):
+      file_choices = "PNG (*.png)|*.png"
+      dlg = wx.FileDialog(self,
+                          message = "Save plot as...",
+                          defaultDir = os.getcwd(),
+                          defaultFile = "plot.png",
+                          wildcard = file_choices,
+                          style = wx.SAVE)
+
+      if dlg.ShowModal() == wx.ID_OK:
+        path = dlg.GetPath()
+        self.canvas.print_figure(path, dpi = self.dpi)
+        self.flash_help_message("Saved to %s" % path)
+
+  def on_file_exit(self, event):
+    self.Destroy()
+
+  def create_status_bar(self):
+    statusbar = self.CreateStatusBar()
+    statusbar.SetFieldsCount(2)
+    self.statusbar = statusbar
+
+  def flash_help_message(self, help, flash_length_ms = 1500):
+    self.statusbar.SetStatusText(help, 0)
+    self.timeroff = wx.Timer(self)
+    self.Bind(wx.EVT_TIMER, self.on_help_message_expire, self.timeroff)
+    self.timeroff.Start(flash_length_ms, oneShot = True)
+
+  def on_help_message_expire(self, event):
+    self.statusbar.SetStatusText('', 0)
+
+  def on_pick(self, event):
+    artist = event.artist
+    if hasattr(event, 'ind'):
+      i = event.ind[(len(event.ind) - 1) / 2] # pick the middle value
+      x, y = artist.get_data()
+      x = x[i]
+      y = y[i]
+      print "pick: (%u, %f)" % (x, y)
+      if isinstance(artist, Line2D):
+        if event.mouseevent.button == 1:
+          if artist.get_linewidth() == 1:
+            artist.set_linewidth(3)
+          else:
+            artist.set_linewidth(1)
+        if event.mouseevent.button == 2:
+          axes = artist.get_axes()
+          axes.text(x + 0.5, y + 0.5, "%.3f MB" % y, color = 'black', fontsize = 10)
+          axes.plot(x, y, color = 'white', marker = 's')
+      self.redraw_plot()
 
   def redraw_plot(self):
     xmin = 0
@@ -164,10 +257,9 @@ class GraphFrame(wx.Frame):
       xmax = 50
     ymin = 0
     self.axes.set_xbound(lower = xmin, upper = xmax)
-    self.axes.grid(True, color = 'gray')
-    pylab.setp(self.axes.get_xticklabels(), visible = True)
     # self.plot_data[0].set_xdata(np.arange(len(self.data)))
     ymax = 0
+    need_legend = False
     for pid in self.data:
       # self.plot_data[0].set_ydata(np.array(self.data[pid]["uss"]))
       # print "pid=%u --> xdata.len=%u, ydata.len=%u" % (pid, len(np.arange(self.data[pid]['xmin'], self.data[pid]['xmax'] + 1)), len(np.array(self.data[pid]['uss'])))
@@ -178,21 +270,33 @@ class GraphFrame(wx.Frame):
         yussmax = round(max(self.data[pid]['uss']), 0) + 1
         if yussmax > ymax:
           ymax = yussmax
-        if plot.get_linewidth() == 1:
+        width = plot.get_linewidth()
+        if width == 1:
           plot.set_label('')
         else:
+          need_legend = True
           plot.set_label('%s (%s)' % (plot.name, plot.pid))
+        if pid in self.plot_starts:
+          self.plot_starts[pid].set_linewidth(width)
+        if pid in self.plot_stops:
+          self.plot_stops[pid].set_linewidth(width)
       # self.plot(np.array(np.arange(len(self.data)), self.data[pid]["uss"]), label = str(pid))
+    if need_legend:
+      self.legend = self.axes.legend(fontsize = 10, loc = 'best')
+    else:
+      try:
+        self.legend.set_visible(False)
+      except:
+        pass
     self.axes.set_ybound(lower = ymin, upper = ymax)
     print "redraw: (%u, %u)-(%u, %u)" % (xmin, ymin, xmax, ymax)
-    self.axes.legend(loc = 'upper right', fontsize = 8)
     self.canvas.draw()
 
   def handle_new(self, pid, msg):
     if pid not in self.data:
       uss = float(msg.payload['uss']) / (1024 * 1024) # megabytes
       self.data[pid] = { "uss": [uss], "xstart": self.x }
-      plot = self.axes.plot(self.data[pid]['uss'], linewidth = 1, picker = 3)[0]
+      plot = self.axes.plot(self.data[pid]['uss'], linewidth = 1, picker = 4)[0]
       plot.pid = pid
       if "name" in msg.payload:
         name = msg.payload['name']
@@ -200,6 +304,7 @@ class GraphFrame(wx.Frame):
         print "[new pid %u uss %.3f name '%s']" % (pid, uss, name)
       else:
         print "[new pid %u uss %.3f]" % (pid, uss)
+      self.plot_starts[pid] = self.axes.plot(self.x, uss, plot.get_color() + 'o')[0]
       self.plot_data[pid] = plot
 
   def handle_update(self, pid, msg):
@@ -212,19 +317,20 @@ class GraphFrame(wx.Frame):
         self.plot_data[pid].name = msg.payload['name']
 
   def handle_old(self, pid, msg):
-    if pid not in self.data_stops:
+    if pid not in self.plot_stops:
       print "[old pid %u]" % pid
-      self.data_stops[pid] = True
       self.data[pid]['uss'].pop()
       if pid in self.data:
-        self.axes.plot(self.x - 1, self.data[pid]['uss'][-1], self.plot_data[pid].get_color() + 'x')
+        self.plot_stops[pid] = self.axes.plot(self.x - 1, self.data[pid]['uss'][-1], self.plot_data[pid].get_color() + 'x')[0]
         self.axes.text(self.x - 1, self.data[pid]['uss'][-1], "%s" % self.plot_data[pid].name, color = 'black', fontsize = 10)
+      else:
+        self.plot_stops[pid] = True
 
   def handle_messages(self, batch):
     self.x = self.x + 1
     for pid in self.data:
       # for now, pre-duplicate all of the last data points
-      if pid not in self.data_stops:
+      if pid not in self.plot_stops:
         self.data[pid]['uss'].append(self.data[pid]['uss'][-1])
     for msg in batch.messages:
       handlers = { "new": self.handle_new,
@@ -240,6 +346,13 @@ class GraphFrame(wx.Frame):
       self.handle_messages(t)
     else:
       print "unhandled update type"
+
+  def connection(self, msg):
+    t = msg.data
+    if isinstance(t, ConnectionStatus):
+      self.statusbar.SetStatusText(t.text, 1)
+    else:
+      print "unhandled connection status message"
 
 if __name__ == '__main__':
   app = wx.PySimpleApp()
