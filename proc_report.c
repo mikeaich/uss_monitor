@@ -251,6 +251,7 @@ proc_write_report(int fd, int sync)
       }
       info->status = PS_UNKNOWN; // reset state to unknown
     }
+    free(stack);
   } else {
     perror("opendir()");
   }
