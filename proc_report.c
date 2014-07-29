@@ -189,7 +189,7 @@ proc_write_report(int fd, int sync)
               free((void*)info->name);
               info->name = name;
             } else {
-              free(name);
+              free((void*)name);
             }
           }
         }
