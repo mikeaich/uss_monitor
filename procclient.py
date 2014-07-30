@@ -350,7 +350,10 @@ class GraphFrame(wx.Frame):
   def connection(self, msg):
     t = msg.data
     if isinstance(t, ConnectionStatus):
-      self.statusbar.SetStatusText(t.text, 1)
+      try:
+        self.statusbar.SetStatusText(t.text, 1)
+      except:
+        pass
     else:
       print "unhandled connection status message"
 
