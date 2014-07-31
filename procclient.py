@@ -3,6 +3,10 @@ import re
 import wx
 import os
 from socket import *
+
+import matplotlib
+matplotlib.use('WXAgg')
+
 from threading import Thread
 from wx.lib.pubsub import Publisher
 from matplotlib.figure import Figure
@@ -85,7 +89,7 @@ class SocketThread(Thread):
             self.block = MessageSet()
           elif line == '<<<':
             """ End of block marker """
-            wx.CallAfter(self.post_data, self.block)
+            self.post_data(self.block)
             self.block = MessageSet()
             self.got_eob = True
           elif self.got_sob:
@@ -101,7 +105,7 @@ class SocketThread(Thread):
           """ This should always be the last line """
           self.stream = line
     close(client)
-    wx.CallAfter(Publisher().sendMessage, "update", "Socket thread finished")
+    self.post_connection_status(ConnectionStatus("Connection to %s closed" % hostport))
 
   def handle_new(self, fields):
     return Message("new", fields)
@@ -113,10 +117,10 @@ class SocketThread(Thread):
     return Message("old", fields)
 
   def post_data(self, data):
-    Publisher().sendMessage("update", data)
+    wx.CallAfter(Publisher().sendMessage, "update", data)
 
   def post_connection_status(self, data):
-    Publisher().sendMessage("connection", data)
+    wx.CallAfter(Publisher().sendMessage, "connection", data)
 
 class GraphFrame(wx.Frame):
   """ The main frame of the application
@@ -282,14 +286,16 @@ class GraphFrame(wx.Frame):
           self.plot_stops[pid].set_linewidth(width)
       # self.plot(np.array(np.arange(len(self.data)), self.data[pid]["uss"]), label = str(pid))
     if need_legend:
-      self.legend = self.axes.legend(fontsize = 10, loc = 'best')
+      # Apparently setting loc = 'best' causes matplotlib to eat up 100% CPU :(
+      # For now, keep this to the left edge where the oldest data is.
+      self.legend = self.axes.legend(fontsize = 10, loc = 'center left')
     else:
       try:
         self.legend.set_visible(False)
       except:
         pass
     self.axes.set_ybound(lower = ymin, upper = ymax)
-    print "redraw: (%u, %u)-(%u, %u)" % (xmin, ymin, xmax, ymax)
+    # print "redraw: (%u, %u)-(%u, %u)" % (xmin, ymin, xmax, ymax)
     self.canvas.draw()
 
   def handle_new(self, pid, msg):
@@ -311,14 +317,14 @@ class GraphFrame(wx.Frame):
     if pid in self.data:
       uss = float(msg.payload['uss']) / (1024 * 1024) # megabytes
       self.data[pid]['uss'][-1] = uss
-      print "[update pid %u uss %.3f --> length %u]" % (pid, uss, len(self.data[pid]['uss']))
+      # print "[update pid %u uss %.3f --> length %u]" % (pid, uss, len(self.data[pid]['uss']))
       if "name" in msg.payload:
         print "[pid new name '%s']" % msg.payload['name']
         self.plot_data[pid].name = msg.payload['name']
 
   def handle_old(self, pid, msg):
     if pid not in self.plot_stops:
-      print "[old pid %u]" % pid
+      # print "[old pid %u]" % pid
       self.data[pid]['uss'].pop()
       if pid in self.data:
         self.plot_stops[pid] = self.axes.plot(self.x - 1, self.data[pid]['uss'][-1], self.plot_data[pid].get_color() + 'x')[0]
