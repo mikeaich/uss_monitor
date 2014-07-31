@@ -35,7 +35,7 @@ class Message:
       # we don't handle the 'name' key properly yet
       if len(kv) == 2:
         self.payload[kv[0]] = kv[1]
-      else:
+      elif 'name' in self.payload:
         self.payload['name'] = self.payload['name'] + " " + kv[0]
     # self.dump()
   def dump(self):
@@ -62,7 +62,13 @@ class SocketThread(Thread):
     self.got_eob = False
     self.host = host
     self.port = port
+    self.keep_going = True
+    Publisher().subscribe(self.wrap_up, "exit")
     self.start()
+
+  def wrap_up(self, msg):
+    print ">>> EXIT <<<"
+    self.keep_going = False
 
   def run(self):
     """ Run socket thread """
@@ -75,7 +81,7 @@ class SocketThread(Thread):
       return False
     self.post_connection_status(ConnectionStatus("Connected to %s" % hostport))
 
-    while True:
+    while self.keep_going:
       chunk = client.recv(1024)
       self.stream = self.stream + chunk
       lines = self.stream.splitlines(1)
@@ -104,7 +110,7 @@ class SocketThread(Thread):
         else:
           """ This should always be the last line """
           self.stream = line
-    close(client)
+    socket.close(client)
     self.post_connection_status(ConnectionStatus("Connection to %s closed" % hostport))
 
   def handle_new(self, fields):
@@ -368,3 +374,4 @@ if __name__ == '__main__':
   app.frame = GraphFrame()
   app.frame.Show()
   app.MainLoop()
+  Publisher().sendMessage("exit")
