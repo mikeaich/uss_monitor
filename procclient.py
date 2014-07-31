@@ -155,8 +155,9 @@ class GraphFrame(wx.Frame):
     self.fig = Figure((3.0, 3.0), dpi = self.dpi)
     axes = self.fig.add_subplot(111)
 
-    # box = self.axes.get_position()
-    # self.axes.set_position([box.x0, box.y0, box.width * 0.9, box.height])
+    #
+    box = axes.get_position()
+    axes.set_position([box.x0, box.y0, box.width * 0.9, box.height])
     # self.axes.legend(loc = 'center left', fontsize = 8, bbox_to_anchor = (1, 0.5))
     # self.axes.set_axis_bgcolor('black')
 
@@ -260,9 +261,10 @@ class GraphFrame(wx.Frame):
       self.redraw_plot()
 
   def redraw_plot(self):
+    """ Draw the plot using all current data, settings """
     xmin = 0
     # xmax = len(self.data)
-    xmax = self.x
+    xmax = self.x * 1.01
     if xmax < 50:
       xmax = 50
     ymin = 0
@@ -294,7 +296,8 @@ class GraphFrame(wx.Frame):
     if need_legend:
       # Apparently setting loc = 'best' causes matplotlib to eat up 100% CPU :(
       # For now, keep this to the left edge where the oldest data is.
-      self.legend = self.axes.legend(fontsize = 10, loc = 'center left')
+      # self.legend = self.axes.legend(fontsize = 10, loc = 'center left')
+      self.legend = self.axes.legend(fontsize = 10, loc = 'center left', bbox_to_anchor = (1, 0.5))
     else:
       try:
         self.legend.set_visible(False)
@@ -305,6 +308,7 @@ class GraphFrame(wx.Frame):
     self.canvas.draw()
 
   def handle_new(self, pid, msg):
+    """ Handle new process """
     if pid not in self.data:
       uss = float(msg.payload['uss']) / (1024 * 1024) # megabytes
       self.data[pid] = { "uss": [uss], "xstart": self.x }
@@ -320,6 +324,7 @@ class GraphFrame(wx.Frame):
       self.plot_data[pid] = plot
 
   def handle_update(self, pid, msg):
+    """ Update an existing process, possibly including a rename """
     if pid in self.data:
       uss = float(msg.payload['uss']) / (1024 * 1024) # megabytes
       self.data[pid]['uss'][-1] = uss
@@ -329,6 +334,7 @@ class GraphFrame(wx.Frame):
         self.plot_data[pid].name = msg.payload['name']
 
   def handle_old(self, pid, msg):
+    """ Handle the death of a process """
     if pid not in self.plot_stops:
       # print "[old pid %u]" % pid
       self.data[pid]['uss'].pop()
@@ -339,6 +345,7 @@ class GraphFrame(wx.Frame):
         self.plot_stops[pid] = True
 
   def handle_messages(self, batch):
+    """ Generic process message dispatch """
     self.x = self.x + 1
     for pid in self.data:
       # for now, pre-duplicate all of the last data points
@@ -353,6 +360,7 @@ class GraphFrame(wx.Frame):
     self.redraw_plot()
 
   def update(self, msg):
+    """ Handle 'update' messages """
     t = msg.data
     if isinstance(t, MessageSet):
       self.handle_messages(t)
@@ -360,6 +368,7 @@ class GraphFrame(wx.Frame):
       print "unhandled update type"
 
   def connection(self, msg):
+    """ Handle 'connection' status messages """
     t = msg.data
     if isinstance(t, ConnectionStatus):
       try:
